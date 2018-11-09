@@ -6,6 +6,7 @@ import model_utils as utils
 
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
+import t3f
 
 def context_gating(input_layer, add_batch_norm=None, is_training=True):
   """Context Gating
@@ -384,6 +385,54 @@ class DBof():
       initializer = tf.random_normal_initializer(stddev=1 / math.sqrt(self.feature_size)))
     tf.summary.histogram("cluster_weights", cluster_weights)
     activation = tf.matmul(reshaped_input, cluster_weights)
+    
+    if self.add_batch_norm:
+      activation = slim.batch_norm(
+          activation,
+          center=True,
+          scale=True,
+          is_training=self.is_training,
+          scope="cluster_bn")
+    else:
+      cluster_biases = tf.get_variable("cluster_biases",
+        [self.cluster_size],
+        initializer = tf.random_normal(stddev=1 / math.sqrt(self.feature_size)))
+      tf.summary.histogram("cluster_biases", cluster_biases)
+      activation += cluster_biases
+    
+    activation = tf.nn.relu6(activation)
+    tf.summary.histogram("cluster_output", activation)
+
+    activation = tf.reshape(activation, [-1, self.max_frames, self.cluster_size])
+    activation = utils.FramePooling(activation, self.dbof_pooling_method)
+
+    return activation
+
+
+class DBof_TensorTrain():
+
+  def __init__(self, feature_size, max_frames, cluster_size, 
+    dbof_pooling_method, add_batch_norm, is_training, **kargs):
+    self.feature_size = feature_size
+    self.max_frames = max_frames
+    self.cluster_size = cluster_size
+    self.dbof_pooling_method = dbof_pooling_method
+    self.add_batch_norm = add_batch_norm
+    self.is_training = is_training
+
+  def forward(self, reshaped_input):
+
+    tt_shape = [(16, 8, 4, 2), (16, 16, 4, 4)]
+
+    assert self.feature_size == np.prod(tt_shape[0])
+    assert self.cluster_size == np.prod(tt_shape[1])
+
+    initializer = t3f.lecun_initializer(tt_shape, tt_rank=2, dtype=tf.float32)
+    cluster_weights = t3f.get_variable("cluster_weights", 
+      initializer=initializer, trainable=True)
+
+    tf.summary.histogram("cluster_weights", cluster_weights)
+    activation = t3f.matmul(reshaped_input, cluster_weights)
     
     if self.add_batch_norm:
       activation = slim.batch_norm(
